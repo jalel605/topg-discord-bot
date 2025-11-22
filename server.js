@@ -1,43 +1,19 @@
-/**
- * تطبيق Express Node.js لتتبع التصويتات وإرسال الإشعارات إلى Discord.
- * **الآلية:** يستخدم نظام الفحص الدوري (Polling/Scraping) لصفحة TopG بدلاً من الـ Webhook.
- * * الميزة: يتتبع عدد الأصوات (Score) على الصفحة ويرسل إشعاراً عند ارتفاعه.
- * * * الاعتمادات:
- * - express: لإنشاء خادم الويب
- * - axios: لجلب محتوى صفحة TopG وإرسال رسائل Discord.
- * - node-cron: لجدولة وظيفة الفحص كل 5 دقائق.
- */
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const app = express();
 
-// إعداد Express لتحليل الـ JSON والبيانات المُرسلة عبر URL-encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// =========================================================
-//                  المتغيرات الأساسية (Configuration)
-// =========================================================
 
-// رابط Discord Webhook (يجب تعيينه كمتغير بيئة)
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-// رابط سيرفرك على TopG (للفحص)
 const SERVER_LINK = "https://topg.org/cs-servers/server-676666"; 
 
-// اسم المالك/السيرفر (يُستخدم في رسالة الشكر الشخصية)
 const SERVER_OWNER_NAME = "FireZM";
 
-// متغير لتخزين آخر عدد أصوات (Score) معروف. يستخدم لتحديد ما إذا كان هناك تصويت جديد.
 let lastKnownTotalVotes = 0;
 
-// =========================================================
-//                   وظائف Discord Webhook
-// =========================================================
-
-/**
- * دالة لإرسال رسالة عند تشغيل السيرفر بنجاح.
- */
 async function sendStartupMessage() {
     if (!DISCORD_WEBHOOK_URL) {
         console.warn("⚠️ Warning: DISCORD_WEBHOOK_URL environment variable is not set. Discord notifications will be disabled.");
@@ -49,7 +25,7 @@ async function sendStartupMessage() {
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
-                    title: "🟢 Bot is Online & Ready! (Polling Mode)",
+                    title: "🟢 [FireZM] Bot is Online & Ready! (Polling Mode)",
                     description: "The TopG vote tracking system is now active. Checking for new votes every 5 minutes.",
                     color: 5763719, // Green color
                     fields: [
@@ -70,7 +46,7 @@ async function sendStartupMessage() {
                         }
                     ],
                     footer: {
-                        text: "System Powered by Render"
+                        text: "System Powered by GlaD"
                     },
                     timestamp: new Date().toISOString()
                 }
@@ -132,27 +108,30 @@ app.get('/', (req, res) => {
 
 /**
  * دالة لاستخراج Score من محتوى HTML لصفحة TopG.
- * تعتمد على العثور على العدد الذي يلي كلمة "Score" في الشيفرة.
- * * ملاحظة: هذه الطريقة هشة وقد تفشل إذا تغير تصميم TopG.
+ * تم تحديثها لتكون أكثر مرونة في استخلاص الرقم الذي يتبع كلمة "Score" مباشرةً.
  */
 function extractScoreFromHtml(html) {
-    // محاولة إيجاد النص الذي يحتوي على 'Score' والرقم
     const searchString = "Score";
     const startIndex = html.indexOf(searchString);
 
     if (startIndex !== -1) {
         // نأخذ مقطعاً كبيراً بعد كلمة 'Score' للبحث عن الرقم
-        const snippet = html.substring(startIndex, startIndex + 300);
+        // حوالي 100 حرف كافية لتجاوز أي وسوم غير ضرورية
+        const snippet = html.substring(startIndex, startIndex + 100);
         
-        // استخدام تعبير منتظم (Regex) للبحث عن أول رقم صحيح يظهر بعد 'Score'
-        // نبحث عن أي رقم داخل وسم HTML مثل <div>40</div> أو <p>40</p>
-        const scoreMatch = snippet.match(/>\s*(\d+)\s*<\//); 
+        // تعبير منتظم (Regex) جديد وأكثر مرونة:
+        // 1. يجد كلمة Score (بشكل اختياري)
+        // 2. يبحث عن أي رقم صحيح (\d+) بعد الكلمة
+        // 3. يتجاهل أي مسافات أو علامات HTML بين الكلمة والرقم
+        const scoreMatch = snippet.match(/(\d+)/); 
 
         if (scoreMatch && scoreMatch[1]) {
-            return parseInt(scoreMatch[1], 10);
+            const score = parseInt(scoreMatch[1], 10);
+            console.log(`[Scraping] Successfully extracted score: ${score}`);
+            return score;
         }
     }
-    // إذا لم يتم العثور على النتيجة، نرجع صفر.
+    console.warn("[Scraping] Could not find the Score number in the HTML content.");
     return 0;
 }
 
@@ -199,7 +178,8 @@ async function checkTopGVotes() {
                 console.log("[Polling] No new votes detected. Score unchanged.");
             }
         } else {
-            console.error("❌ Failed to extract score from TopG page HTML. Scraping logic may be broken.");
+            // إذا كان Score = 0، فهناك خطأ في الاستخلاص (Scraping)
+            console.error("❌ Failed to extract score from TopG page HTML. Scraping logic may be broken or score is 0.");
         }
 
     } catch (error) {

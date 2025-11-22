@@ -1,14 +1,14 @@
 {
-  "name": "topg-vote-bridge",
+  "name": "topg-polling-bot",
   "version": "1.0.0",
-  "description": "TopG to Discord with Daily Stats",
-  "main": "index.js",
+  "description": "A Node.js bot to track TopG votes using polling/scraping and send Discord notifications.",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "axios": "^1.6.0",
+    "express": "^4.19.2",
+    "axios": "^1.7.2",
     "node-cron": "^3.0.3"
   }
 }
