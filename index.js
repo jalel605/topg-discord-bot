@@ -1,38 +1,42 @@
 /**
- * Express Node.js application to track votes and send notifications to Discord.
- * Integrates with TopG.org using their Webhook system.
- * * Dependencies:
- * - express: To create the web server
- * - axios: To send HTTP requests (to Discord Webhook)
- * - node-cron: To schedule recurring tasks (daily report)
+ * تطبيق Express Node.js لتتبع التصويتات وإرسال الإشعارات إلى Discord.
+ * يتكامل مع TopG.org باستخدام نظام الـ Webhook الخاص بهم.
+ * * الميزة: يتتبع ويعرض اسم المصوّت إذا تم تقديمه في الرابط.
+ * * * الاعتمادات:
+ * - express: لإنشاء خادم الويب
+ * - axios: لإرسال طلبات HTTP (إلى Discord Webhook)
+ * - node-cron: لجدولة المهام المتكررة (التقرير اليومي)
  */
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const app = express();
 
-// Express setup for parsing JSON and URL-encoded data
+// إعداد Express لتحليل الـ JSON والبيانات المُرسلة عبر URL-encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
-//                  Configuration Variables
+//                  المتغيرات الأساسية (Configuration)
 // =========================================================
 
-// Discord Webhook URL (must be set as an environment variable)
+// رابط Discord Webhook (يجب تعيينه كمتغير بيئة)
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-// Your server link on TopG, used in vote buttons and reports
+// رابط سيرفرك على TopG
 const SERVER_LINK = "https://topg.org/cs-servers/server-676666"; 
 
-// Variable to store the daily vote count
+// اسم المالك/السيرفر (يُستخدم في رسالة الشكر الشخصية)
+const SERVER_OWNER_NAME = "FireZM";
+
+// متغير لحفظ عدد الأصوات اليومية
 let dailyVotes = 0;
 
 // =========================================================
-//                   Discord Webhook Functions
+//                   وظائف Discord Webhook
 // =========================================================
 
 /**
- * Function to send a message when the server starts successfully.
+ * دالة لإرسال رسالة عند تشغيل السيرفر بنجاح.
  */
 async function sendStartupMessage() {
     if (!DISCORD_WEBHOOK_URL) {
@@ -45,7 +49,7 @@ async function sendStartupMessage() {
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
-                    title: "🟢 Bot is Online & Ready!",
+                    title: "🟢 [FireZM] Bot is Online & Ready!",
                     description: "The TopG vote tracking system is now working successfully.",
                     color: 5763719, // Green color
                     fields: [
@@ -61,14 +65,14 @@ async function sendStartupMessage() {
                         },
                         {
                             name: "ℹ️ Info",
-                            value: "You can vote every **6 hours**.\nDaily stats will be sent at midnight (UTC).",
+                            value: "To get a shoutout, use the customized vote link (see instructions below).\nDaily stats will be sent at midnight (UTC).",
                             inline: false
                         }
                     ],
                     footer: {
                         text: "System Powered by GlaD"
                     },
-                    timestamp: new Date().toISOString() // Use ISOString format
+                    timestamp: new Date().toISOString()
                 }
             ]
         });
@@ -79,7 +83,7 @@ async function sendStartupMessage() {
 }
 
 /**
- * Function to send a daily report with the total number of votes.
+ * دالة لإرسال تقرير يومي بعدد الأصوات.
  */
 async function sendDailyReport() {
     if (!DISCORD_WEBHOOK_URL) return;
@@ -107,40 +111,47 @@ async function sendDailyReport() {
 
 
 // =========================================================
-//                         Express Routes
+//                         مسارات Express
 // =========================================================
 
-// Root Path (Health Check)
+// المسار الرئيسي (Health Check)
 app.get('/', (req, res) => {
     res.status(200).send(`Server is Running. Today's votes: ${dailyVotes}`);
 });
 
 /**
- * 2. Vote Receiving Endpoint (Webhook Endpoint)
- * TopG sends a GET request here upon a successful vote.
- * It expects a query parameter named 'p_resp' containing the voter's IP address.
+ * 2. مسار استقبال التصويت (Webhook Endpoint)
+ * يستقبل 'p_resp' (IP) من TopG و 'voter_name' من الرابط المخصص.
  */
 app.get('/vote', async (req, res) => {
-    // Extract the voter IP from the 'p_resp' query parameter
+    // استخراج IP من معلمة Webhook الخاصة بـ TopG
     const voter_ip = req.query.p_resp || "Unknown IP (No p_resp provided)";
     
-    // Increment the daily vote count
+    // استخراج معلمة الاسم المخصصة (على سبيل المثال، من '?voter_name=glad')
+    // الآن، القيمة الافتراضية هي "A Player" (أي "لاعب")
+    const voter_name = req.query.voter_name || "A Player";
+    
+    // زيادة عدد الأصوات اليومية
     dailyVotes++;
     
-    console.log(`✅ New vote received from: ${voter_ip}. Daily total: ${dailyVotes}`);
+    console.log(`✅ New vote received from: ${voter_name} (${voter_ip}). Daily total: ${dailyVotes}`);
 
     if (DISCORD_WEBHOOK_URL) {
         try {
             await axios.post(DISCORD_WEBHOOK_URL, {
                 embeds: [
                     {
-                        title: "✅ New Vote Received!",
-                        description: "**Thank you for supporting our server!**",
+                        title: `🌟 New Vote Received by ${voter_name}!`,
+                        
+                        // رسالة الشكر المحدثة
+                        description: `**${SERVER_OWNER_NAME} thanks ${voter_name} for supporting the server by voting on TopG!**`,
+                        
                         color: 3447003, // Blue color
                         fields: [
-                            // Use || around the IP to hide it as a Discord spoiler
-                            { name: "Voter IP", value: `||${voter_ip}||`, inline: true },
-                            { name: "Total Today", value: `${dailyVotes}`, inline: true }
+                            { name: "Voter Name", value: `${voter_name}`, inline: true },
+                            { name: "Total Today", value: `${dailyVotes}`, inline: true },
+                            // يتم إخفاء الـ IP كـ spoiler للخصوصية
+                            { name: "Voter IP", value: `||${voter_ip}||`, inline: false }, 
                         ],
                         timestamp: new Date().toISOString()
                     }
@@ -151,35 +162,33 @@ app.get('/vote', async (req, res) => {
         }
     }
     
-    // Always send a quick response to the Webhook
+    // يجب دائمًا إرسال استجابة سريعة للـ Webhook
     res.status(200).send('Vote Received');
 });
 
 // =========================================================
-//                         Scheduling (Cron Job)
+//                         جدولة المهام (Cron Job)
 // =========================================================
 
 /**
- * 3. Schedule: Send daily report and reset the counter (12:00 AM UTC)
- * Format: 'minute hour day_of_month month day_of_week'
- * '0 0 * * *' means 0 minutes, 0 hours (midnight) every day.
+ * 3. الجدولة: إرسال التقرير اليومي وتصفير العداد (الساعة 12:00 صباحًا بتوقيت UTC)
  */
 cron.schedule('0 0 * * *', async () => {
     console.log("--- Running daily report job ---");
     
-    // 1. Send the report first
+    // إرسال التقرير أولاً
     await sendDailyReport(); 
     
-    // 2. Reset the daily vote counter
+    // تصفير عداد الأصوات اليومية
     dailyVotes = 0;
     console.log("Daily vote counter has been reset.");
 }, {
-    timezone: "UTC" // Recommended to specify timezone for consistency
+    timezone: "UTC"
 });
 
 
 // =========================================================
-//                   Server Startup
+//                   بدء تشغيل السيرفر
 // =========================================================
 
 const PORT = process.env.PORT || 3000;
@@ -187,6 +196,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server started successfully on port: ${PORT}`);
     
-    // Call the startup message function when the server starts
+    // استدعاء دالة رسالة التشغيل عند بدء السيرفر
     sendStartupMessage();
 });
