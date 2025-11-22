@@ -49,7 +49,7 @@ async function sendStartupMessage() {
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
-                    title: "🟢 [FireZM] Bot is Online & Ready! (Polling Mode)",
+                    title: "🟢 Bot is Online & Ready! (Polling Mode)",
                     description: "The TopG vote tracking system is now active. Checking for new votes every 5 minutes.",
                     color: 5763719, // Green color
                     fields: [
@@ -70,7 +70,7 @@ async function sendStartupMessage() {
                         }
                     ],
                     footer: {
-                        text: "System Powered by GlaD"
+                        text: "System Powered by Render"
                     },
                     timestamp: new Date().toISOString()
                 }
