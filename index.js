@@ -23,7 +23,7 @@ async function sendStartupMessage() {
                 embeds: [
                     {
                         title: "🟢 Bot is Online & Ready!",
-                        description: "نظام التتبع الخاص بـ TopG يعمل الآن بنجاح.",
+                        description: "TopG's tracking system is now working successfully."
                         color: 5763719, // لون أخضر
                         fields: [
                             {
