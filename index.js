@@ -128,8 +128,7 @@ app.get('/vote', async (req, res) => {
     const voter_ip = req.query.p_resp || "Unknown IP (No p_resp provided)";
     
     // استخراج معلمة الاسم المخصصة (على سبيل المثال، من '?voter_name=glad')
-    // الآن، القيمة الافتراضية هي "A Player" (أي "لاعب")
-    const voter_name = req.query.voter_name || "A Player";
+    const voter_name = req.query.voter_name || "A Player"; // القيمة الافتراضية "A Player"
     
     // زيادة عدد الأصوات اليومية
     dailyVotes++;
@@ -157,9 +156,16 @@ app.get('/vote', async (req, res) => {
                     }
                 ]
             });
+            console.log(`✅ Discord notification sent successfully for ${voter_name}.`);
+
         } catch (error) { 
-            console.error("Error sending vote notification:", error.message); 
+            // ❌ تسجيل خطأ الإرسال ببساطة (تبسيط بناء على طلبك)
+            console.error(`❌ FAILED to send Discord notification for ${voter_name}.`);
+            console.error(`Error details (Check Webhook URL and Discord settings): ${error.message}`);
         }
+    } else {
+        // ❌ تسجيل واضح في حال عدم تعيين الرابط
+        console.error("❌ FAILED: DISCORD_WEBHOOK_URL is NOT configured. Notification skipped.");
     }
     
     // يجب دائمًا إرسال استجابة سريعة للـ Webhook
