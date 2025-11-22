@@ -66,7 +66,7 @@ async function sendStartupMessage() {
                         }
                     ],
                     footer: {
-                        text: "System Powered by Render"
+                        text: "System Powered by GlaD"
                     },
                     timestamp: new Date().toISOString() // Use ISOString format
                 }
