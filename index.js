@@ -1,11 +1,11 @@
 /**
  * تطبيق Express Node.js لتتبع التصويتات وإرسال الإشعارات إلى Discord.
- * يتكامل مع TopG.org باستخدام نظام الـ Webhook الخاص بهم.
- * * الميزة: يتتبع ويعرض اسم المصوّت إذا تم تقديمه في الرابط.
+ * **الآلية:** يستخدم نظام الفحص الدوري (Polling/Scraping) لصفحة TopG بدلاً من الـ Webhook.
+ * * الميزة: يتتبع عدد الأصوات (Score) على الصفحة ويرسل إشعاراً عند ارتفاعه.
  * * * الاعتمادات:
  * - express: لإنشاء خادم الويب
- * - axios: لإرسال طلبات HTTP (إلى Discord Webhook)
- * - node-cron: لجدولة المهام المتكررة (التقرير اليومي)
+ * - axios: لجلب محتوى صفحة TopG وإرسال رسائل Discord.
+ * - node-cron: لجدولة وظيفة الفحص كل 5 دقائق.
  */
 const express = require('express');
 const axios = require('axios');
@@ -22,14 +22,14 @@ app.use(express.urlencoded({ extended: true }));
 
 // رابط Discord Webhook (يجب تعيينه كمتغير بيئة)
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-// رابط سيرفرك على TopG
+// رابط سيرفرك على TopG (للفحص)
 const SERVER_LINK = "https://topg.org/cs-servers/server-676666"; 
 
 // اسم المالك/السيرفر (يُستخدم في رسالة الشكر الشخصية)
 const SERVER_OWNER_NAME = "FireZM";
 
-// متغير لحفظ عدد الأصوات اليومية
-let dailyVotes = 0;
+// متغير لتخزين آخر عدد أصوات (Score) معروف. يستخدم لتحديد ما إذا كان هناك تصويت جديد.
+let lastKnownTotalVotes = 0;
 
 // =========================================================
 //                   وظائف Discord Webhook
@@ -49,23 +49,23 @@ async function sendStartupMessage() {
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
-                    title: "🟢 [FireZM] Bot is Online & Ready!",
-                    description: "The TopG vote tracking system is now working successfully.",
+                    title: "🟢 [FireZM] Bot is Online & Ready! (Polling Mode)",
+                    description: "The TopG vote tracking system is now active. Checking for new votes every 5 minutes.",
                     color: 5763719, // Green color
                     fields: [
                         {
                             name: "🌍 Server Status",
-                            value: "Listening for votes...",
+                            value: "Polling TopG score...",
                             inline: true
                         },
                         {
-                            name: "🔗 Vote Link",
-                            value: `[Click Here to Vote](${SERVER_LINK})`,
+                            name: "🔗 Check Link",
+                            value: `[TopG Server Page](${SERVER_LINK})`,
                             inline: true
                         },
                         {
-                            name: "ℹ️ Info",
-                            value: "To get a shoutout, use the customized vote link (see instructions below).\nDaily stats will be sent at midnight (UTC).",
+                            name: "⚠️ Reliability Note",
+                            value: "Votes may be delayed up to 5 minutes. Total votes lost on server restart.",
                             inline: false
                         }
                     ],
@@ -83,29 +83,36 @@ async function sendStartupMessage() {
 }
 
 /**
- * دالة لإرسال تقرير يومي بعدد الأصوات.
+ * دالة لإرسال إشعار بالتصويت الجديد (في نظام الفحص الدوري، لا نعرف اسم المصوت).
+ * @param {number} currentTotalVotes - إجمالي عدد الأصوات الحالي.
  */
-async function sendDailyReport() {
+async function sendNewVoteNotification(currentTotalVotes) {
     if (!DISCORD_WEBHOOK_URL) return;
 
     try {
-        console.log(`Sending daily report with ${dailyVotes} votes.`);
+        console.log(`Sending new vote notification. New total: ${currentTotalVotes}.`);
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
-                    title: "📊 Daily Vote Report",
-                    description: `We received **${dailyVotes}** votes today!`,
-                    color: 15105570, // Orange color
+                    title: `🌟 New Vote Received! (Score: ${currentTotalVotes})`,
+                    
+                    // رسالة الشكر المحدثة (نستخدم الاسم الافتراضي لأننا لا نعرف هوية المصوّت)
+                    description: `**${SERVER_OWNER_NAME} thanks a dedicated supporter for voting on TopG!**`,
+                    
+                    color: 3447003, // Blue color
                     fields: [
-                        { name: "Vote Again", value: `[Link](${SERVER_LINK})` }
+                        { name: "Total Score", value: `${currentTotalVotes}`, inline: true },
+                        { name: "Vote Again", value: `[Link](${SERVER_LINK})`, inline: true }, 
                     ],
                     timestamp: new Date().toISOString()
                 }
             ]
         });
-        console.log("Daily report sent successfully.");
-    } catch (error) {
-        console.error("Error sending daily report:", error.message);
+        console.log(`✅ Discord notification sent successfully for new vote.`);
+
+    } catch (error) { 
+        console.error(`❌ FAILED to send Discord notification for new vote.`);
+        console.error(`Error details: ${error.message}`);
     }
 }
 
@@ -114,111 +121,104 @@ async function sendDailyReport() {
 //                         مسارات Express
 // =========================================================
 
-// المسار الرئيسي (Health Check)
+// المسار الرئيسي (Health Check) - الوحيد المتبقي
 app.get('/', (req, res) => {
-    res.status(200).send(`Server is Running. Today's votes: ${dailyVotes}`);
+    res.status(200).send(`Server is Running. Last known score: ${lastKnownTotalVotes}`);
 });
+
+// =========================================================
+//                   وظائف الفحص الدوري (Polling)
+// =========================================================
 
 /**
- * 2. مسار استقبال التصويت (Webhook Endpoint)
- * يستقبل 'p_resp' (IP) من TopG و 'voter_name' من الرابط المخصص.
+ * دالة لاستخراج Score من محتوى HTML لصفحة TopG.
+ * تعتمد على العثور على العدد الذي يلي كلمة "Score" في الشيفرة.
+ * * ملاحظة: هذه الطريقة هشة وقد تفشل إذا تغير تصميم TopG.
  */
-app.get('/vote', async (req, res) => {
-    // استخراج IP من معلمة Webhook الخاصة بـ TopG
-    const voter_ip = req.query.p_resp || "Unknown IP (No p_resp provided)";
-    
-    // استخراج معلمة الاسم المخصصة (على سبيل المثال، من '?voter_name=glad')
-    // القيمة الافتراضية الآن هي "A Player"
-    const voter_name = req.query.voter_name || "A Player"; 
-    
-    // زيادة عدد الأصوات اليومية
-    dailyVotes++;
-    
-    console.log(`✅ New vote received from: ${voter_name} (${voter_ip}). Daily total: ${dailyVotes}`);
+function extractScoreFromHtml(html) {
+    // محاولة إيجاد النص الذي يحتوي على 'Score' والرقم
+    const searchString = "Score";
+    const startIndex = html.indexOf(searchString);
 
-    if (DISCORD_WEBHOOK_URL) {
-        try {
-            await axios.post(DISCORD_WEBHOOK_URL, {
-                embeds: [
-                    {
-                        title: `🌟 New Vote Received by ${voter_name}!`,
-                        
-                        // رسالة الشكر المحدثة
-                        description: `**${SERVER_OWNER_NAME} thanks ${voter_name} for supporting the server by voting on TopG!**`,
-                        
-                        color: 3447003, // Blue color
-                        fields: [
-                            { name: "Voter Name", value: `${voter_name}`, inline: true },
-                            { name: "Total Today", value: `${dailyVotes}`, inline: true },
-                            // يتم إخفاء الـ IP كـ spoiler للخصوصية
-                            { name: "Voter IP", value: `||${voter_ip}||`, inline: false }, 
-                        ],
-                        timestamp: new Date().toISOString()
-                    }
-                ]
-            });
-            console.log(`✅ Discord notification sent successfully for ${voter_name}.`);
+    if (startIndex !== -1) {
+        // نأخذ مقطعاً كبيراً بعد كلمة 'Score' للبحث عن الرقم
+        const snippet = html.substring(startIndex, startIndex + 300);
+        
+        // استخدام تعبير منتظم (Regex) للبحث عن أول رقم صحيح يظهر بعد 'Score'
+        // نبحث عن أي رقم داخل وسم HTML مثل <div>40</div> أو <p>40</p>
+        const scoreMatch = snippet.match(/>\s*(\d+)\s*<\//); 
 
-        } catch (error) { 
-            // ❌ تسجيل خطأ الإرسال ببساطة (تبسيط بناء على طلبك)
-            console.error(`❌ FAILED to send Discord notification for ${voter_name}.`);
-            console.error(`Error details (Check Webhook URL and Discord settings): ${error.message}`);
+        if (scoreMatch && scoreMatch[1]) {
+            return parseInt(scoreMatch[1], 10);
         }
-    } else {
-        // ❌ تسجيل واضح في حال عدم تعيين الرابط
-        console.error("❌ FAILED: DISCORD_WEBHOOK_URL is NOT configured. Notification skipped.");
     }
-    
-    // يجب دائمًا إرسال استجابة سريعة للـ Webhook
-    res.status(200).send('Vote Received');
-});
+    // إذا لم يتم العثور على النتيجة، نرجع صفر.
+    return 0;
+}
+
+/**
+ * دالة فحص TopG: يتم تشغيلها بشكل دوري كل 5 دقائق.
+ */
+async function checkTopGVotes() {
+    console.log(`--- Running TopG poll job at ${new Date().toLocaleTimeString()} ---`);
+    let currentScore = 0;
+
+    try {
+        // 1. جلب محتوى HTML
+        const response = await axios.get(SERVER_LINK);
+        const html = response.data;
+        
+        // 2. استخراج Score
+        currentScore = extractScoreFromHtml(html);
+
+        if (currentScore > 0) {
+            // المعالجة عند التشغيل الأول: فقط سجل النتيجة ولا ترسل إشعار.
+            if (lastKnownTotalVotes === 0) {
+                lastKnownTotalVotes = currentScore;
+                console.log(`[Polling] Initial score set to ${currentScore}. No notification sent.`);
+                return;
+            }
+
+            // 3. مقارنة النتيجة الجديدة بالنتيجة الأخيرة
+            if (currentScore > lastKnownTotalVotes) {
+                const newVotes = currentScore - lastKnownTotalVotes;
+                console.log(`🎉 New votes detected! Count: ${newVotes}.`);
+                
+                // إرسال إشعار واحد لكل تصويت جديد (نكرر الرسالة لعدد الأصوات الجديدة)
+                for (let i = 0; i < newVotes; i++) {
+                    await sendNewVoteNotification(currentScore);
+                }
+
+                // 4. تحديث آخر نتيجة معروفة
+                lastKnownTotalVotes = currentScore;
+            } else if (currentScore < lastKnownTotalVotes) {
+                // حالة نادرة (عادةً تحدث عند إعادة تشغيل العداد الشهري أو الخادم)
+                console.warn(`[Polling] Score decreased (from ${lastKnownTotalVotes} to ${currentScore}). Resetting last known score.`);
+                lastKnownTotalVotes = currentScore;
+            } else {
+                console.log("[Polling] No new votes detected. Score unchanged.");
+            }
+        } else {
+            console.error("❌ Failed to extract score from TopG page HTML. Scraping logic may be broken.");
+        }
+
+    } catch (error) {
+        console.error("❌ Error during TopG polling:", error.message);
+    }
+}
 
 // =========================================================
 //                         جدولة المهام (Cron Job)
 // =========================================================
 
 /**
- * 3. الجدولة: إرسال التقرير اليومي وتصفير العداد (الساعة 12:00 صباحًا بتوقيت UTC)
+ * الجدولة: فحص صفحة TopG كل 5 دقائق
+ * '*/5 * * * *' = كل 5 دقائق
  */
-cron.schedule('0 0 * * *', async () => {
-    console.log("--- Running daily report job ---");
-    
-    // إرسال التقرير أولاً
-    await sendDailyReport(); 
-    
-    // تصفير عداد الأصوات اليومية
-    dailyVotes = 0;
-    console.log("Daily vote counter has been reset.");
-}, {
+cron.schedule('*/5 * * * *', checkTopGVotes, {
     timezone: "UTC"
 });
 
-
-// =========================================================
-//                 Keep-Alive / Self-Pinging
-// =========================================================
-
-/**
- * دالة Keep-Alive: لإبقاء الخادم نشطًا ومنع دخوله في وضع السكون (Idle Mode).
- * يُرسل طلبًا إلى المسار الرئيسي للخادم كل 5 دقائق.
- * * ملاحظة: يجب أن تستخدم الرابط العام للخادم عند التشغيل الفعلي.
- */
-function startKeepAlive() {
-    const keepAliveInterval = 5 * 60 * 1000; // 5 دقائق بالمللي ثانية
-
-    setInterval(async () => {
-        try {
-            // بما أن هذا الكود يعمل داخل خادم الويب نفسه، نستخدم المسار المحلي.
-            // في بيئة الإنتاج مثل Render، يقوم هذا الإجراء بإبقاء الخادم نشطاً.
-            await axios.get(`http://localhost:${PORT}/`); 
-            console.log(`[Keep-Alive] Self-ping successful at ${new Date().toLocaleTimeString()}.`);
-        } catch (error) {
-            // لا نسجل خطأ Network/Timeout لأن هذا متوقع أحياناً في بيئات معينة.
-            // نكتفي بتسجيل محاولة الإيقاظ.
-             console.log(`[Keep-Alive] Attempted self-ping at ${new Date().toLocaleTimeString()}.`);
-        }
-    }, keepAliveInterval);
-}
 
 // =========================================================
 //                   بدء تشغيل السيرفر
@@ -232,6 +232,6 @@ app.listen(PORT, () => {
     // 1. استدعاء دالة رسالة التشغيل
     sendStartupMessage();
     
-    // 2. بدء وظيفة Keep-Alive بعد تشغيل الخادم
-    startKeepAlive();
+    // 2. تشغيل الفحص الأولي فوراً عند بدء التشغيل
+    checkTopGVotes();
 });
