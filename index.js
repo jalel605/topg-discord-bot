@@ -1,116 +1,192 @@
+/**
+ * تطبيق Express Node.js لتتبع التصويتات وإرسال الإشعارات إلى Discord
+ * يعتمد على TopG.org باستخدام الـ Webhook الخاص بها.
+ * * Dependencies:
+ * - express: لإنشاء خادم الويب
+ * - axios: لإرسال طلبات HTTP (إلى Discord Webhook)
+ * - node-cron: لجدولة المهام المتكررة (التقرير اليومي)
+ */
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const app = express();
 
+// إعداد Express لتحليل الـ JSON والبيانات المُرسلة عبر URL-encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// المتغيرات
+// =========================================================
+//                  المتغيرات الأساسية (Configuration)
+// =========================================================
+
+// رابط Discord Webhook (يجب تعيينه كمتغير بيئة)
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-// ضع رابط سيرفرك هنا
+// رابط سيرفرك على TopG، يُستخدم في أزرار التصويت والتقارير
 const SERVER_LINK = "https://topg.org/cs-servers/server-676666"; 
 
 // متغير لحفظ عدد الأصوات اليومية
 let dailyVotes = 0;
 
-// 1. دالة لإرسال رسالة عند تشغيل السيرفر
+// =========================================================
+//                   وظائف Discord Webhook
+// =========================================================
+
+/**
+ * دالة لإرسال رسالة عند تشغيل السيرفر بنجاح.
+ */
 async function sendStartupMessage() {
-    if (DISCORD_WEBHOOK_URL) {
-        try {
-            console.log("Sending Startup Message to Discord...");
-            await axios.post(DISCORD_WEBHOOK_URL, {
-                embeds: [
-                    {
-                        title: "🟢 Bot is Online & Ready!",
-                        description: "TopG's tracking system is now working successfully."
-                        color: 5763719, // لون أخضر
-                        fields: [
-                            {
-                                name: "🌍 Server Status",
-                                value: "Listening for votes...",
-                                inline: true
-                            },
-                            {
-                                name: "🔗 Vote Link",
-                                value: `[Click Here to Vote](${SERVER_LINK})`,
-                                inline: true
-                            },
-                            {
-                                name: "ℹ️ Info",
-                                value: "You can vote every **6 hours**.\nDaily stats will be sent at midnight.",
-                                inline: false
-                            }
-                        ],
-                        footer: {
-                            text: "System Powered by Render"
+    if (!DISCORD_WEBHOOK_URL) {
+        console.warn("⚠️ تحذير: لم يتم تعيين متغير DISCORD_WEBHOOK_URL. لن يتم إرسال إشعارات Discord.");
+        return;
+    }
+
+    try {
+        console.log("جارٍ إرسال رسالة بدء التشغيل إلى Discord...");
+        await axios.post(DISCORD_WEBHOOK_URL, {
+            embeds: [
+                {
+                    title: "🟢 الروبوت متصل وجاهز!",
+                    description: "نظام تتبع التصويتات على TopG يعمل بنجاح.",
+                    color: 5763719, // لون أخضر
+                    fields: [
+                        {
+                            name: "🌍 حالة السيرفر",
+                            value: "يستمع لطلبات التصويت...",
+                            inline: true
                         },
-                        timestamp: new Date()
-                    }
-                ]
-            });
-        } catch (error) {
-            console.error("Error sending startup message:", error.message);
-        }
+                        {
+                            name: "🔗 رابط التصويت",
+                            value: `[اضغط هنا للتصويت](${SERVER_LINK})`,
+                            inline: true
+                        },
+                        {
+                            name: "ℹ️ معلومات",
+                            value: "يمكنك التصويت كل **6 ساعات**.\nسيتم إرسال الإحصائيات اليومية عند منتصف الليل.",
+                            inline: false
+                        }
+                    ],
+                    footer: {
+                        text: "النظام مدعوم من Render"
+                    },
+                    timestamp: new Date().toISOString() // استخدام ISOString لضمان التنسيق الصحيح
+                }
+            ]
+        });
+        console.log("تم إرسال رسالة بدء التشغيل بنجاح.");
+    } catch (error) {
+        console.error("خطأ في إرسال رسالة بدء التشغيل:", error.message);
     }
 }
 
+/**
+ * دالة لإرسال تقرير يومي بعدد الأصوات.
+ */
+async function sendDailyReport() {
+    if (!DISCORD_WEBHOOK_URL) return;
+
+    try {
+        console.log(`جارٍ إرسال التقرير اليومي بـ ${dailyVotes} صوت.`);
+        await axios.post(DISCORD_WEBHOOK_URL, {
+            embeds: [
+                {
+                    title: "📊 تقرير التصويت اليومي",
+                    description: `لقد تلقينا **${dailyVotes}** صوتًا اليوم!`,
+                    color: 15105570, // لون برتقالي
+                    fields: [
+                        { name: "صوّت مرة أخرى", value: `[الرابط](${SERVER_LINK})` }
+                    ],
+                    timestamp: new Date().toISOString()
+                }
+            ]
+        });
+        console.log("تم إرسال التقرير اليومي بنجاح.");
+    } catch (error) {
+        console.error("خطأ في إرسال التقرير اليومي:", error.message);
+    }
+}
+
+
+// =========================================================
+//                         مسارات Express
+// =========================================================
+
+// المسار الرئيسي (Health Check)
 app.get('/', (req, res) => {
-    res.send(`Server is Running. Today's votes: ${dailyVotes}`);
+    res.status(200).send(`Server is Running. Today's votes: ${dailyVotes}`);
 });
 
-// 2. استقبال التصويت
+/**
+ * 2. مسار استقبال التصويت (Webhook Endpoint)
+ * يستخدم TopG لإرسال طلب GET عند كل تصويت ناجح.
+ * يتوقع أن يحتوي على query parameter باسم 'p_resp' لعنوان IP المصوّت.
+ */
 app.get('/vote', async (req, res) => {
-    const voter_ip = req.query.p_resp || "Unknown IP";
+    // استخراج IP المصوت من query parameter 'p_resp'
+    const voter_ip = req.query.p_resp || "Unknown IP (No p_resp provided)";
+    
+    // زيادة عدد الأصوات اليومية
     dailyVotes++;
     
+    console.log(`✅ تصويت جديد من: ${voter_ip}. الإجمالي اليومي: ${dailyVotes}`);
+
     if (DISCORD_WEBHOOK_URL) {
         try {
             await axios.post(DISCORD_WEBHOOK_URL, {
                 embeds: [
                     {
-                        title: "✅ New Vote Received!",
-                        description: "**Thank you for supporting our server!**",
+                        title: "✅ تم استلام تصويت جديد!",
+                        description: "**شكرًا لك على دعمك للسيرفر!**",
                         color: 3447003, // أزرق
                         fields: [
-                            { name: "Voter IP", value: `||${voter_ip}||`, inline: true },
-                            { name: "Total Today", value: `${dailyVotes}`, inline: true }
+                            // نستخدم || حول IP لإخفائه في Discord كـ spoiler
+                            { name: "IP المصوّت", value: `||${voter_ip}||`, inline: true },
+                            { name: "الإجمالي اليومي", value: `${dailyVotes}`, inline: true }
                         ],
-                        timestamp: new Date()
+                        timestamp: new Date().toISOString()
                     }
                 ]
             });
-        } catch (error) { console.error(error); }
+        } catch (error) { 
+            console.error("خطأ في إرسال إشعار التصويت:", error.message); 
+        }
     }
-    res.send('Vote Received');
+    
+    // يجب دائمًا إرسال استجابة سريعة للـ Webhook
+    res.status(200).send('Vote Received');
 });
 
-// 3. التقرير اليومي (الساعة 12 ليلاً)
+// =========================================================
+//                         جدولة المهام (Cron Job)
+// =========================================================
+
+/**
+ * 3. الجدولة: إرسال التقرير اليومي وتصفير العداد (الساعة 12:00 صباحًا بتوقيت UTC)
+ * الصيغة: 'minute hour day_of_month month day_of_week'
+ * '0 0 * * *' تعني 0 دقيقة، 0 ساعة (منتصف الليل) كل يوم.
+ */
 cron.schedule('0 0 * * *', async () => {
-    if (DISCORD_WEBHOOK_URL) {
-        try {
-            await axios.post(DISCORD_WEBHOOK_URL, {
-                embeds: [
-                    {
-                        title: "📊 Daily Vote Report",
-                        description: `We received **${dailyVotes}** votes today!`,
-                        color: 15105570, // برتقالي
-                        fields: [
-                            { name: "Vote Again", value: `[Link](${SERVER_LINK})` }
-                        ],
-                        timestamp: new Date()
-                    }
-                ]
-            });
-        } catch (error) { console.error(error); }
-    }
+    console.log("--- تشغيل مهمة التقرير اليومي ---");
+    
+    // إرسال التقرير أولاً
+    await sendDailyReport(); 
+    
+    // تصفير عداد الأصوات اليومية
     dailyVotes = 0;
+    console.log("تم تصفير عداد الأصوات اليومية.");
+}, {
+    timezone: "UTC" // يفضل تحديد التوقيت لضمان التناسق
 });
+
+
+// =========================================================
+//                   بدء تشغيل السيرفر
+// =========================================================
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-    console.log(`Server started on port ${PORT}`);
+    console.log(`🚀 السيرفر بدأ العمل على المنفذ: ${PORT}`);
     
-    // هنا نستدعي دالة رسالة التشغيل
+    // نستدعي دالة رسالة التشغيل عند بدء السيرفر
     sendStartupMessage();
 });
