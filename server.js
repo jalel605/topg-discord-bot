@@ -1,219 +1,219 @@
 /**
  * Express Node.js application for TopG vote tracking.
- * Mechanism: Polling/Scraping the TopG page every 5 minutes.
+ * FINAL FIX: Ultra-strict Regex for Rank/Score + Updated field label to "Click Here to Vote".
  */
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const app = express();
 
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
-//                  Configuration
+//                  Configuration (الإعدادات)
 // =========================================================
 
-// Discord Webhook URL (must be set as an environment variable)
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-// TopG server link for scraping
 const SERVER_LINK = "https://topg.org/cs-servers/server-676666"; 
-
-// Server owner name used in the notification message
+// تأكد أن هذا الرابط هو رابط البوت الخاص بك على ريندر
+const WEBHOOK_BASE_URL = "https://topg-discord-bot.onrender.com"; 
 const SERVER_OWNER_NAME = "FireZM";
 
-// Variable to store the last known vote count (Score)
-let lastKnownTotalVotes = 0;
+// Global Variables
+let lastKnownTotalVotes = 0; 
+let lastKnownRank = "N/A";
 
-// =========================================================
-//                   Discord Webhook Functions
-// =========================================================
-
-async function sendStartupMessage() {
-    if (!DISCORD_WEBHOOK_URL) {
-        console.warn("⚠️ Warning: DISCORD_WEBHOOK_URL environment variable is not set. Discord notifications will be disabled.");
-        return;
+// Header to behave like a real browser (تجنب الحظر)
+const AXIOS_CONFIG = {
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
     }
+};
 
-    try {
-        console.log("Sending Startup Message to Discord...");
-        await axios.post(DISCORD_WEBHOOK_URL, {
-            embeds: [
-                {
-                    // Updated title with [FireZM]
-                    title: "🟢 [FireZM] Bot is Online & Ready! (Polling Mode)",
-                    description: "The TopG vote tracking system is now active. Checking for new votes every 5 minutes.",
-                    color: 5763719, // Green color
-                    fields: [
-                        {
-                            name: "🌍 Server Status",
-                            value: "Polling TopG score...",
-                            inline: true
-                        },
-                        {
-                            name: "🔗 Check Link",
-                            value: `[TopG Server Page](${SERVER_LINK})`,
-                            inline: true
-                        },
-                        {
-                            name: "⚠️ Reliability Note",
-                            value: "Votes may be delayed up to 5 minutes. Total votes lost on server restart.",
-                            inline: false
-                        }
-                    ],
-                    // Updated footer text
-                    footer: {
-                        text: "System Powered by GlaD"
-                    },
-                    timestamp: new Date().toISOString()
-                }
-            ]
-        });
-        console.log("Startup message sent successfully.");
-    } catch (error) {
-        console.error("Error sending startup message:", error.message);
+// =========================================================
+//             Helper Functions (دوال الاستخراج المعدلة)
+// =========================================================
+
+function extractScore(html) {
+    // التحسين: تجاهل أي أكواد HTML أو مسافات بين كلمة Score والرقم
+    const match = html.match(/(?:Score|Votes|Points)(?:<[^>]+>|\s|&nbsp;)*([\d,]+)/i);
+    if (match && match[1]) {
+        return parseInt(match[1].replace(/,/g, ''), 10);
     }
-}
-
-async function sendNewVoteNotification(currentTotalVotes) {
-    if (!DISCORD_WEBHOOK_URL) return;
-
-    try {
-        console.log(`Sending new vote notification. New total: ${currentTotalVotes}.`);
-        await axios.post(DISCORD_WEBHOOK_URL, {
-            embeds: [
-                {
-                    title: `🌟 New Vote Received! (Score: ${currentTotalVotes})`,
-                    description: `**${SERVER_OWNER_NAME} thanks a dedicated supporter for voting on TopG!**`,
-                    color: 3447003, // Blue color
-                    fields: [
-                        { name: "Total Score", value: `${currentTotalVotes}`, inline: true },
-                        { name: "Vote Again", value: `[Link](${SERVER_LINK})`, inline: true }, 
-                    ],
-                    timestamp: new Date().toISOString()
-                }
-            ]
-        });
-        console.log(`✅ Discord notification sent successfully for new vote.`);
-
-    } catch (error) { 
-        console.error(`❌ FAILED to send Discord notification for new vote.`);
-        console.error(`Error details: ${error.message}`);
-    }
-}
-
-
-// =========================================================
-//                         Express Routes
-// =========================================================
-
-// Main route (Health Check)
-app.get('/', (req, res) => {
-    res.status(200).send(`Server is Running. Last known score: ${lastKnownTotalVotes}`);
-});
-
-// =========================================================
-//                   Polling Functions
-// =========================================================
-
-/**
- * Function to scrape and extract the Score from TopG's HTML content.
- * It searches for the number that immediately follows the word "Score".
- */
-function extractScoreFromHtml(html) {
-    const searchString = "Score";
-    const startIndex = html.indexOf(searchString);
-
-    if (startIndex !== -1) {
-        // Take a large snippet after 'Score' to look for the number
-        const snippet = html.substring(startIndex, startIndex + 100);
-        
-        // Flexible Regex to find the first integer (\d+) after 'Score', ignoring HTML tags and spaces
-        const scoreMatch = snippet.match(/(\d+)/); 
-
-        if (scoreMatch && scoreMatch[1]) {
-            const score = parseInt(scoreMatch[1], 10);
-            console.log(`[Scraping] Successfully extracted score: ${score}`);
-            return score;
-        }
-    }
-    console.warn("[Scraping] Could not find the Score number in the HTML content.");
     return 0;
 }
 
-/**
- * TopG check function: runs periodically every 5 minutes.
- */
-async function checkTopGVotes() {
-    console.log(`--- Running TopG poll job at ${new Date().toLocaleTimeString()} ---`);
-    let currentScore = 0;
+function extractRank(html) {
+    // FIX: البحث عن كلمة Rank التي تكون محصورة بين أقواس التاغ (>Rank<)
+    // هذا يضمن أننا نأخذ الرانك من الجدول الجانبي وليس من نص كتابي في الوصف
+    // Regex explanation: Look for ">Rank<" (label), then skip tags/spaces until the number.
+    const match = html.match(/>\s*Rank\s*<\s*\/?[^>]+>(?:[^0-9]*?)([\d,]+)/i);
+    
+    // إذا لم تنجح الطريقة الدقيقة، نستخدم الطريقة القديمة كاحتياط
+    if (!match) {
+         const fallback = html.match(/Rank(?:<[^>]+>|\s|&nbsp;)*(?:#)?([\d,]+)/i);
+         return fallback ? fallback[1] : "N/A";
+    }
+    
+    return match ? match[1] : "N/A";
+}
 
+async function fetchScoreAndRank() {
     try {
-        // 1. Fetch HTML content
-        const response = await axios.get(SERVER_LINK);
-        const html = response.data;
+        console.log("⏱️ Fetching current score and rank from TopG...");
+        const { data } = await axios.get(SERVER_LINK, AXIOS_CONFIG);
         
-        // 2. Extract Score
-        currentScore = extractScoreFromHtml(html);
+        const score = extractScore(data);
+        const rank = extractRank(data);
+        
+        // تحديث المتغيرات العامة
+        if (score !== 0) lastKnownTotalVotes = score;
+        if (rank !== "N/A") lastKnownRank = rank;
 
-        if (currentScore > 0) {
-            // Initial run: set score, no notification
-            if (lastKnownTotalVotes === 0) {
-                lastKnownTotalVotes = currentScore;
-                console.log(`[Polling] Initial score set to ${currentScore}. No notification sent.`);
-                return;
-            }
+        console.log(`📊 Updated Stats -> Score: ${lastKnownTotalVotes}, Rank: ${lastKnownRank}`);
+        return { score: lastKnownTotalVotes, rank: lastKnownRank };
+    } catch (e) {
+        console.error("⚠️ Failed to fetch stats. Using last known values.");
+        console.error(e.message);
+        return { score: lastKnownTotalVotes, rank: lastKnownRank };
+    }
+}
 
-            // 3. Compare new score with last known score
-            if (currentScore > lastKnownTotalVotes) {
-                const newVotes = currentScore - lastKnownTotalVotes;
-                console.log(`🎉 New votes detected! Count: ${newVotes}.`);
-                
-                // Send notification for each new vote
-                for (let i = 0; i < newVotes; i++) {
-                    await sendNewVoteNotification(currentScore);
-                }
-
-                // 4. Update last known score
-                lastKnownTotalVotes = currentScore;
-            } else if (currentScore < lastKnownTotalVotes) {
-                // Monthly reset or server reset
-                console.warn(`[Polling] Score decreased (from ${lastKnownTotalVotes} to ${currentScore}). Resetting last known score.`);
-                lastKnownTotalVotes = currentScore;
-            } else {
-                console.log("[Polling] No new votes detected. Score unchanged.");
-            }
-        } else {
-            console.error("❌ Failed to extract score from TopG page HTML. Scraping logic may be broken or score is 0.");
-        }
-
+async function sendStatusUpdateMessage(score, rank) {
+    if (!DISCORD_WEBHOOK_URL) return;
+    try {
+        await axios.post(DISCORD_WEBHOOK_URL, {
+            embeds: [{
+                title: "🔄 Server Status Update",
+                description: "Automatic update for Server Rank and Total Votes.",
+                color: 16776960, // Yellow
+                fields: [
+                    { name: "🏆 Current Rank", value: `**${rank}**`, inline: true },
+                    { name: "🗳️ Total Votes", value: `**${score}**`, inline: true },
+                    // تغيير التسمية إلى "Click Here to Vote"
+                    { name: "🔗 Vote Link", value: `[Click Here to Vote](${SERVER_LINK})`, inline: false }
+                ],
+                footer: { text: "System Powered by GlaD" },
+                timestamp: new Date().toISOString()
+            }]
+        });
+        console.log("✅ Status update message sent.");
     } catch (error) {
-        console.error("❌ Error during TopG polling:", error.message);
+        console.error("❌ Error sending status update:", error.message);
+    }
+}
+
+async function sendVoteNotification(currentTotalVotes, currentRank, voterName) {
+    if (!DISCORD_WEBHOOK_URL) return;
+    try {
+        await axios.post(DISCORD_WEBHOOK_URL, {
+            embeds: [{
+                title: `🌟 New Vote Received!`,
+                description: `Thank you **${voterName}** for supporting ${SERVER_OWNER_NAME}!`,
+                color: 3447003, // Blue
+                fields: [
+                    { name: "📈 New Total Votes", value: `**${currentTotalVotes}**`, inline: true },
+                    { name: "🏅 Current Rank", value: `**${currentRank}**`, inline: true },
+                    // تغيير التسمية إلى "Click Here to Vote" في إشعار التصويت
+                    { name: "🗳️ Vote Again", value: `[Click Here to Vote](${SERVER_LINK})`, inline: true }
+                ],
+                footer: { text: "XPlayZm Staff Team" },
+                timestamp: new Date().toISOString()
+            }]
+        });
+        console.log(`✅ Notification sent for voter: ${voterName}`);
+    } catch (error) {
+        console.error("❌ Failed to send vote notification:", error.message);
+    }
+}
+
+async function sendStartupMessage() {
+    // جلب البيانات الأولية
+    await fetchScoreAndRank();
+    
+    if (!DISCORD_WEBHOOK_URL) return;
+    try {
+        await axios.post(DISCORD_WEBHOOK_URL, {
+            embeds: [{
+                title: "🟢 [FireZM] Bot is Online!",
+                description: "Listening for TopG Webhooks. Auto-updates scheduled.",
+                color: 5763719, // Green
+                fields: [
+                    { name: "Starting Score", value: `${lastKnownTotalVotes}`, inline: true },
+                    { name: "Starting Rank", value: `${lastKnownRank}`, inline: true },
+                    // إبقاء رابط الويب هوك في رسالة البداية
+                    { name: "🔗 Vote Link", value: `[Click Here to Vote](${SERVER_LINK})`, inline: false }
+                ],
+                footer: { text: "System Powered by GlaD" },
+                timestamp: new Date().toISOString()
+            }]
+        });
+        console.log("✅ Startup message sent.");
+    } catch (error) {
+        console.error("❌ Error sending startup message:", error.message);
     }
 }
 
 // =========================================================
-//                         Cron Job Scheduling
+//                  CRON JOB (التحديث التلقائي)
 // =========================================================
 
-// Schedule: Check TopG page every 5 minutes ('*/5 * * * *')
-cron.schedule('*/5 * * * *', checkTopGVotes, {
-    timezone: "UTC"
+function startAutoUpdater() {
+    // كل 15 دقيقة
+    cron.schedule('*/15 * * * *', async () => {
+        console.log('--- 🔄 Auto-Update Job Started ---');
+        const { score, rank } = await fetchScoreAndRank();
+        await sendStatusUpdateMessage(score, rank);
+        console.log('--- ✅ Auto-Update Job Finished ---');
+    }, {
+        scheduled: true,
+        timezone: "Asia/Riyadh"
+    });
+    console.log("⏰ Auto-update job scheduled (Every 15 mins).");
+}
+
+// =========================================================
+//                          Routes
+// =========================================================
+
+app.get('/', (req, res) => {
+    res.send(`Bot Status: Online. <br>Votes: ${lastKnownTotalVotes} <br>Rank: ${lastKnownRank}`);
 });
 
+app.post('/vote', async (req, res) => {
+    console.log(`\n🔔 [WEBHOOK] Vote received at ${new Date().toLocaleTimeString()}`);
+    
+    const voterName = req.body.username || req.body.voter_name || req.body.p_resp || "Unknown Voter";
+
+    try {
+        const { score: currentScore, rank: currentRank } = await fetchScoreAndRank();
+        
+        let displayScore = currentScore;
+        
+        if (currentScore <= lastKnownTotalVotes) {
+            console.log("⚠️ Site lag detected.");
+        }
+
+        await sendVoteNotification(displayScore, currentRank, voterName);
+        
+        res.status(200).send("OK");
+    } catch (error) {
+        console.error("❌ Error processing webhook:", error.message);
+        res.status(500).send("Error");
+    }
+});
 
 // =========================================================
-//                   Server Startup
+//                          Start
 // =========================================================
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-    console.log(`🚀 Server started successfully on port: ${PORT}`);
-    
-    // 1. Send startup message
+    console.log(`🚀 Server running on port ${PORT}`);
     sendStartupMessage();
-    
-    // 2. Run initial check immediately
-    checkTopGVotes();
+    startAutoUpdater();
 });
